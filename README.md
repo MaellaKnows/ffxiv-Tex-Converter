@@ -160,7 +160,7 @@ README.txt                         详细变更记录（中文）
 
 GPL-3.0 允许任何人使用、研究、修改和再分发本工具——**包括收费分发**——只要结果仍然保持 GPL-3.0，并把完整源码交给每一位接收者。这项自由任何人都拿不走，包括作者。
 
-**作者请求大家不要售卖本工具，因为所有代码都来自于社区。** 这是一个请求，不是授权条件：它没有法律效力，也不限制 GPL-3.0 赋予你的任何权利。原文与说明都在 [ADDITIONAL-TERMS.md](ADDITIONAL-TERMS.md) 里，写得明明白白。
+**希望大家不要售卖本工具，因为所有代码都来自于开源社区。** 这是一个请求，不是授权条件：它没有法律效力，也不限制 GPL-3.0 赋予你的任何权利。原文与说明都在 [ADDITIONAL-TERMS.md](ADDITIONAL-TERMS.md) 里，写得明明白白。
 
 许可证**真正可以强制执行**的是这两条：
 
@@ -311,7 +311,7 @@ The code was written with AI coding agents as the main implementers, under human
 
 GPL-3.0 lets anyone use, study, modify and redistribute this tool — **including selling it** — as long as the result stays GPL-3.0 and every recipient gets the complete source. No one, including the author, can take that freedom away.
 
-**The author asks that you don't sell it.** That is a request, not a license condition: it has no legal force, and it does not limit anything GPL-3.0 grants. It is written out in full, and honestly labelled, in [ADDITIONAL-TERMS.md](ADDITIONAL-TERMS.md).
+**Please do not sell this tool, as all of its code originates from the open-source community.** That is a request, not a license condition: it has no legal force, and it does not limit anything GPL-3.0 grants. It is written out in full, and honestly labelled, in [ADDITIONAL-TERMS.md](ADDITIONAL-TERMS.md).
 
 What the license *does* make enforceable, under §7:
 
