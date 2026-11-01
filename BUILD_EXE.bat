@@ -3,7 +3,7 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 
 echo ================================================
-echo   FFXIV Texture Batch Converter - v1.2
+echo   FFXIV Texture Batch Converter - v2.1
 echo   One-click EXE build
 echo ================================================
 echo.

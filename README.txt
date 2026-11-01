@@ -1,6 +1,22 @@
-FFXIV贴图批量转换器 | version 1.1 | Miili
+FFXIV贴图批量转换器 | version 2.1 | Miili
 FFXIV Texture Batch Converter
 PNG -> TEX / TEX -> TEX（BC1 / BC3 / BC5 / BC7 / BGRA8）
+
+================================================================
+〇、v2.1 新增：中文 / English 界面
+================================================================
+
+* 窗口右上角（标题右边）有「中文 | EN」两个小按钮，点一下即可切换。
+  该位置在所有操作控件之外，不会误触，也不影响原有布局。
+* 默认是中文。切换后的语言会立刻写进设置文件，下次启动直接沿用；
+  关掉程序再开也还是上次选的语言。
+* 切换只影响之后的界面文字和新的日志行；已经写进日志的历史内容保持原样。
+* --convert / --selftest 这些无界面模式也跟随设置里的语言。
+* 语言记在设置文件的 "lang" 字段：
+      %APPDATA%\Miili\FFXIV贴图批量转换器\ffxiv_tex_converter_v1_1_settings.json
+  想强制回到中文，把该字段删掉或改成 "cn" 即可。
+* UI language can be switched between Chinese and English with the
+  "中文 | EN" buttons in the top-right corner. The choice is remembered.
 
 ================================================================
 一、这一版改了什么
@@ -89,7 +105,7 @@ v1.0 每转换一张图都要重新启动一次 texconv.exe，每次启动约有
 1. 安装 Python 3.10+（勾选 Add Python to PATH）。
 2. 双击 BUILD_EXE.bat。
    脚本会自动安装 PyInstaller、准备 texconv.exe，然后打包。
-3. 成品：dist\FFXIV贴图批量转换器.exe
+3. 成品：dist\FF14 Tex Converter.exe
 
 说明：
 * tools\texconv.exe 已经随包提供（Microsoft DirectXTex 2026.5.8）。
@@ -102,7 +118,7 @@ v1.0 每转换一张图都要重新启动一次 texconv.exe，每次启动约有
 四、自检（排查「转换失败」时很有用）
 ================================================================
 
-    FFXIV贴图批量转换器.exe --selftest
+    "FF14 Tex Converter.exe" --selftest
 
 会在同目录生成 selftest_report.json，内容包括：
   * texconv 是否找到、版本号
@@ -122,7 +138,7 @@ tools\texconv.exe  Microsoft DirectXTex 官方压缩工具
 icon.ico           程序/窗口图标
 FFXIVTextureBatchConverter.spec   PyInstaller 打包配置
 prepare_texconv.py 打包前准备 texconv.exe
-rename_output.py   构建后把 EXE 改成中文名
+rename_output.py   构建后把 EXE 改名为 FF14 Tex Converter.exe
 BUILD_EXE.bat      一键构建
 CLEAN_BUILD.bat    清理 build/dist
 
@@ -155,10 +171,15 @@ v1.3 修复（2026-10-29）
   （不落盘），读取也改成安全取值 settings.get("input")。
 - 新增无界面转换模式，便于排查和脚本批量处理：
 
-      FFXIV贴图批量转换器.exe --convert <文件或文件夹> [输出目录] [--format BC1_UNORM]
+      "FF14 Tex Converter.exe" --convert <文件或文件夹> [输出目录] [--format BC1_UNORM]
 
   走的和界面「开始」按钮完全相同的流程，结果写进 输出目录\convert_report.json，
   全部成功返回 0，有失败返回 1。
 - dist\FFXIV贴图批量转换器ver1.3.exe 已用修复后的源码重新打包；
   修复前的旧文件备份在 dist\_backup\ 里。
 
+v2.1 多语言（2026-11-01）
+- 新增 中文 / English 界面切换，位置在窗口右上角，默认中文。
+- 语言选择会保存到设置文件（lang 字段），下次启动自动沿用。
+- 界面、日志、错误提示、格式推荐理由、状态栏全部支持两种语言。
+- 尺寸下拉框的文案随语言变化，但内部仍按像素值解析，旧设置照常迁移。

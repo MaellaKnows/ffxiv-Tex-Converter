@@ -17,7 +17,9 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+import i18n
 import texlib
+from i18n import t
 from texlib import (
     Job,
     RunStats,
@@ -29,7 +31,11 @@ from texlib import (
     tex_info,
 )
 
-APP_TITLE = "FFXIV贴图批量转换器 | version 2.0 | Miili 制造"
+
+def app_title() -> str:
+    """窗口标题和对话框标题跟界面语言保持一致。"""
+    return t("app.title")
+
 
 if getattr(sys, "frozen", False):
     # PyInstaller --onefile 会把文件解压到临时 _MEI 目录，配置要放 AppData。
@@ -43,7 +49,8 @@ LEGACY_SETTINGS_FILE = _config_root / "ffxiv_png_to_tex_v1_0_settings.json"
 # 无控制台的 EXE 出错时什么都看不到，留一份可排查的日志。
 LOG_FILE = _config_root / "error.log"
 
-SIZE_CHOICES = ("原尺寸", "512（长边）", "1024（长边）", "2048（长边）", "4096（长边）")
+# 「图片尺寸」在设置里按长边像素存，界面文案随语言切换。
+SIZE_TARGETS = (None, 512, 1024, 2048, 4096)
 
 WM_DROPFILES = 0x0233
 GWL_WNDPROC = -4
@@ -101,15 +108,26 @@ def save_settings(data: dict) -> str | None:
         return f"{type(exc).__name__}: {exc}"
 
 
+def size_label(target: int | None) -> str:
+    """长边像素 -> 当前语言下的下拉框文案。"""
+    return t("size.original") if target is None else t("size.edge", n=target)
+
+
+def size_labels() -> tuple[str, ...]:
+    return tuple(size_label(n) for n in SIZE_TARGETS)
+
+
+def size_target_from_label(text: str | None) -> int | None:
+    """下拉框文案 -> 长边像素；「原尺寸 / Original」都返回 None。
+
+    两种语言、以及旧版本保存的 '1024×1024' 都能解析，因为只看数字。
+    """
+    return texlib.parse_target_size(text or "")
+
+
 def normalize_size_choice(text: str | None) -> str:
-    """把旧版本保存的 '1024×1024' 迁移成新的「长边」写法。"""
-    if not text:
-        return SIZE_CHOICES[0]
-    text = text.strip()
-    if text in SIZE_CHOICES:
-        return text
-    n = texlib.parse_target_size(text)
-    return f"{n}（长边）" if n else SIZE_CHOICES[0]
+    """把旧版本保存的 '1024×1024' 迁移成当前语言的长边写法。"""
+    return size_label(size_target_from_label(text))
 
 
 # ---------------------------------------------------------------------------
@@ -238,21 +256,27 @@ class App:
         self._run_started = 0.0
 
         s = load_settings()
+        # 语言必须在建界面之前确定，文案初始化就靠它。
+        i18n.set_lang(s.get("lang"))
         self._saved_geometry = s.get("geometry", "")
+        # 需要跟随语言刷新文字的控件：(控件, 文案键, 格式化参数)
+        self._i18n_widgets: list[tuple[tk.Widget, str, dict]] = []
+        self._drop_key = "drop.text"
+        self.lang_chips: dict[str, tk.Label] = {}
 
         self.input_var = tk.StringVar(value="")  # PNG 来源路径每次启动重新选择，不持久化
         self.output_var = tk.StringVar(value=s.get("output", ""))
         self.format_var = tk.StringVar(value=s.get("format", "BC7_UNORM"))
         self.quality_var = tk.StringVar(value=s.get("quality", "q"))
         self.size_var = tk.StringVar(value=normalize_size_choice(s.get("size")))
-        self.recommend_var = tk.StringVar(value="未检测")
-        self.recommend_reason_var = tk.StringVar(value="选择 PNG 后会按文件名推荐格式")
+        self.recommend_var = tk.StringVar(value=t("rec.none"))
+        self.recommend_reason_var = tk.StringVar(value=t("rec.placeholder"))
         self.auto_recommend_var = tk.BooleanVar(value=bool(s.get("auto_recommend", True)))
         self.recursive_var = tk.BooleanVar(value=bool(s.get("recursive", True)))
         self.overwrite_var = tk.BooleanVar(value=bool(s.get("overwrite", True)))
         self.tex_overwrite_source_var = tk.BooleanVar(value=bool(s.get("tex_overwrite_source", False)))
         self.skip_same_var = tk.BooleanVar(value=bool(s.get("skip_same", True)))
-        self.status_var = tk.StringVar(value="准备就绪")
+        self.status_var = tk.StringVar(value=t("status.ready_texconv"))
         self.percent_var = tk.StringVar(value="0%")
         self.progress_var = tk.DoubleVar(value=0)
 
@@ -314,48 +338,103 @@ class App:
 
     def build_ui(self) -> None:
         root = self.root
-        root.title(APP_TITLE)
+        root.title(app_title())
         self._apply_icon()
 
         header = ttk.Frame(root)
         header.pack(fill="x", padx=16, pady=(12, 0))
-        ttk.Label(
-            header, text="FFXIV 贴图批量转换器", style="Header.TLabel"
-        ).pack(anchor="w")
-        ttk.Label(
-            header,
-            text="PNG → TEX  ·  TEX → TEX  ·  BC1 / BC3 / BC5 / BC7 / BGRA8",
-            style="Subheader.TLabel",
+        header.columnconfigure(0, weight=1)
+
+        title_box = ttk.Frame(header)
+        title_box.grid(row=0, column=0, sticky="w")
+        self._text(ttk.Label(title_box, style="Header.TLabel"), "app.header").pack(anchor="w")
+        self._text(
+            ttk.Label(title_box, style="Subheader.TLabel"), "app.subtitle"
         ).pack(anchor="w", pady=(3, 0))
 
+        # 语言开关放在标题右侧的空白处，远离所有操作控件。
+        self._build_lang_switch(header).grid(
+            row=0, column=1, sticky="ne", padx=(12, 0), pady=(2, 0)
+        )
+
+        self._build_body()
+
+    def _text(self, widget, key: str, **kwargs):
+        """登记一个静态文案控件，切换语言时自动重设文字。"""
+        self._i18n_widgets.append((widget, key, kwargs))
+        widget.configure(text=t(key, **kwargs))
+        return widget
+
+    def _build_lang_switch(self, parent) -> tk.Frame:
+        """右上角的「中文 / EN」开关：两个小色块，点击即切换。"""
+        holder = tk.Frame(
+            parent, bg=self.root.cget("background"), bd=0, highlightthickness=0
+        )
+        for index, code in enumerate(i18n.LANGUAGES):
+            chip = tk.Label(
+                holder,
+                text=i18n.LANGUAGE_NAMES[code],
+                font=("Segoe UI", 9),
+                padx=9,
+                pady=1,
+                bd=0,
+                highlightthickness=0,
+                cursor="hand2",
+                takefocus=False,
+            )
+            chip.grid(
+                row=0,
+                column=index,
+                sticky="nsew",
+                padx=(0 if index == 0 else 3, 0),
+            )
+            chip.bind("<Button-1>", lambda _event, c=code: self.set_language(c))
+            self.lang_chips[code] = chip
+        self._paint_lang_switch()
+        return holder
+
+    def _paint_lang_switch(self) -> None:
+        current = i18n.get_lang()
+        for code, chip in self.lang_chips.items():
+            active = code == current
+            chip.configure(
+                background="#7456a6" if active else "#e7e0f2",
+                foreground="#ffffff" if active else "#4c356f",
+                font=("Segoe UI", 9, "bold" if active else "normal"),
+            )
+
+    def _set_ready_status(self) -> None:
+        if texlib.find_texconv():
+            self.status_var.set(t("status.ready_texconv"))
+        else:
+            self.status_var.set(t("status.ready_download"))
+
+    def _build_body(self) -> None:
+        root = self.root
         main = ttk.Frame(root)
         main.pack(fill="both", expand=True, padx=14, pady=10)
         for col, weight in ((0, 0), (1, 1), (2, 0), (3, 0)):
             main.columnconfigure(col, weight=weight)
         main.rowconfigure(10, weight=1)
 
-        drop = ttk.LabelFrame(main, text="拖放")
+        drop = ttk.LabelFrame(main)
+        self._text(drop, "drop.frame")
         drop.grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 10))
         self.drop_label = ttk.Label(
             drop,
-            text="把 PNG / TEX 文件或文件夹拖到这里\n"
-                 "PNG 会被压缩成 TEX；TEX 会转成「输出格式」里选的格式\n"
-                 "支持一次拖入多个项目",
+            text=t(self._drop_key),
             anchor="center", justify="center", font=("Segoe UI", 10),
         )
         self.drop_label.pack(fill="x", padx=14, pady=12)
 
-        self.add_path_row(main, 1, "PNG 输入", self.input_var, self.choose_input)
-        self.add_path_row(main, 2, "TEX 输出", self.output_var, self.choose_output)
+        self.add_path_row(main, 1, "lbl.input", self.input_var, self.choose_input)
+        self.add_path_row(main, 2, "lbl.output", self.output_var, self.choose_output)
 
-        ttk.Label(
-            main,
-            text="提示：TEX 输出留空时，生成的 TEX 会放在源文件旁边；"
-                 "勾选「直接覆盖源文件」后，TEX→TEX 会原地替换。",
-            foreground="#666666",
+        self._text(
+            ttk.Label(main, foreground="#666666"), "hint.output"
         ).grid(row=3, column=0, columnspan=4, sticky="w", pady=(0, 8))
 
-        ttk.Label(main, text="输出格式").grid(row=4, column=0, sticky="w", pady=6)
+        self._text(ttk.Label(main), "lbl.format").grid(row=4, column=0, sticky="w", pady=6)
         self.format_box = ttk.Combobox(
             main, textvariable=self.format_var,
             values=texlib.SUPPORTED_FORMATS, state="readonly", width=22,
@@ -366,17 +445,19 @@ class App:
             text="BC1 0x3420 · BC3 0x3431 · BC5 0x6230 · BC7 0x6432 · BGRA8 0x1450",
         ).grid(row=4, column=2, columnspan=2, sticky="w")
 
-        ttk.Label(main, text="图片尺寸").grid(row=5, column=0, sticky="w", pady=6)
-        size_box = ttk.Combobox(
-            main, textvariable=self.size_var, values=SIZE_CHOICES,
+        self._text(ttk.Label(main), "lbl.size").grid(row=5, column=0, sticky="w", pady=6)
+        self.size_box = ttk.Combobox(
+            main, textvariable=self.size_var, values=size_labels(),
             state="readonly", width=22,
         )
-        size_box.grid(row=5, column=1, sticky="w", padx=8)
-        ttk.Label(main, text="按长边等比缩放，不会把非正方形贴图拉变形").grid(
+        self.size_box.grid(row=5, column=1, sticky="w", padx=8)
+        self._text(ttk.Label(main), "hint.size").grid(
             row=5, column=2, columnspan=2, sticky="w"
         )
 
-        ttk.Label(main, text="自动推荐").grid(row=6, column=0, sticky="nw", pady=6)
+        self._text(ttk.Label(main), "lbl.recommend").grid(
+            row=6, column=0, sticky="nw", pady=6
+        )
         rec = ttk.Frame(main)
         rec.grid(row=6, column=1, columnspan=3, sticky="ew", padx=8, pady=2)
         rec.columnconfigure(0, weight=1)
@@ -384,45 +465,49 @@ class App:
         ttk.Label(rec, textvariable=self.recommend_var, font=("Segoe UI", 9, "bold")).grid(
             row=0, column=0, sticky="w"
         )
-        ttk.Checkbutton(
-            rec, text="按文件名逐个推荐（PNG）", variable=self.auto_recommend_var
+        self._text(
+            ttk.Checkbutton(
+                rec, variable=self.auto_recommend_var,
+                command=self._on_auto_recommend_toggle,
+            ),
+            "chk.auto_recommend",
         ).grid(row=0, column=1, sticky="e", padx=(8, 0))
-        ttk.Button(rec, text="推荐当前 PNG", command=self.auto_recommend, width=14).grid(
-            row=0, column=2, sticky="e", padx=(8, 0)
-        )
+        self._text(
+            ttk.Button(rec, command=self.auto_recommend, width=22), "btn.recommend"
+        ).grid(row=0, column=2, sticky="e", padx=(8, 0))
         ttk.Label(
             rec, textvariable=self.recommend_reason_var, foreground="#555555", wraplength=700
         ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 0))
 
-        ttk.Label(main, text="压缩质量").grid(row=7, column=0, sticky="w", pady=6)
+        self._text(ttk.Label(main), "lbl.quality").grid(row=7, column=0, sticky="w", pady=6)
         quality = ttk.Combobox(
             main, textvariable=self.quality_var, values=("q", "x"),
             state="readonly", width=22,
         )
         quality.grid(row=7, column=1, sticky="w", padx=8)
-        ttk.Label(main, text="q = 快速；x = 最高质量（仅 BC7 生效）").grid(
+        self._text(ttk.Label(main), "hint.quality").grid(
             row=7, column=2, columnspan=2, sticky="w"
         )
 
         opts = ttk.Frame(main)
         opts.grid(row=8, column=0, columnspan=4, sticky="ew", pady=(6, 8))
-        ttk.Checkbutton(opts, text="递归扫描子文件夹", variable=self.recursive_var).grid(
-            row=0, column=0, sticky="w"
-        )
-        ttk.Checkbutton(opts, text="覆盖已存在的输出文件", variable=self.overwrite_var).grid(
-            row=0, column=1, sticky="w", padx=(18, 0)
-        )
-        ttk.Checkbutton(
-            opts, text="TEX→TEX 直接覆盖源文件", variable=self.tex_overwrite_source_var
+        self._text(
+            ttk.Checkbutton(opts, variable=self.recursive_var), "chk.recursive"
+        ).grid(row=0, column=0, sticky="w")
+        self._text(
+            ttk.Checkbutton(opts, variable=self.overwrite_var), "chk.overwrite"
+        ).grid(row=0, column=1, sticky="w", padx=(18, 0))
+        self._text(
+            ttk.Checkbutton(opts, variable=self.tex_overwrite_source_var), "chk.tex_overwrite"
         ).grid(row=0, column=2, sticky="w", padx=(18, 0))
-        ttk.Checkbutton(
-            opts, text="TEX 已是目标格式时跳过重压缩", variable=self.skip_same_var
+        self._text(
+            ttk.Checkbutton(opts, variable=self.skip_same_var), "chk.skip_same"
         ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
-        ttk.Label(main, text="转换结果 / 日志").grid(
+        self._text(ttk.Label(main), "lbl.log").grid(
             row=9, column=0, sticky="w", pady=(2, 4)
         )
-        ttk.Button(main, text="清空日志", command=self.clear_log, width=10).grid(
+        self._text(ttk.Button(main, command=self.clear_log, width=10), "btn.clear_log").grid(
             row=9, column=3, sticky="e", pady=(2, 4)
         )
 
@@ -461,32 +546,30 @@ class App:
         ttk.Label(bottom, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
 
         self.start_button = ttk.Button(
-            bottom, text="开始 PNG→TEX", command=self.start, width=16, style="Primary.TButton"
+            bottom, command=self.start, width=16, style="Primary.TButton"
         )
+        self._text(self.start_button, "btn.start")
         self.start_button.grid(row=0, column=1, padx=4)
-        self.tex_button = ttk.Button(
-            bottom, text="批量 TEX 格式转换…", command=self.choose_tex_files, width=20
-        )
+        self.tex_button = ttk.Button(bottom, command=self.choose_tex_files, width=21)
+        self._text(self.tex_button, "btn.batch_tex")
         self.tex_button.grid(row=0, column=2, padx=4)
-        self.cancel_button = ttk.Button(
-            bottom, text="取消", command=self.on_cancel, width=8, state="disabled"
-        )
+        self.cancel_button = ttk.Button(bottom, command=self.on_cancel, width=8, state="disabled")
+        self._text(self.cancel_button, "btn.cancel")
         self.cancel_button.grid(row=0, column=3, padx=4)
-        ttk.Button(bottom, text="打开输出文件夹", command=self.open_output, width=16).grid(
-            row=0, column=4, padx=(4, 0)
-        )
+        self._text(
+            ttk.Button(bottom, command=self.open_output, width=19), "btn.open_output"
+        ).grid(row=0, column=4, padx=(4, 0))
 
         self.root.update_idletasks()
-        if not enable_windows_drop(self.root.winfo_id(), self.on_drop):
-            self.drop_label.configure(
-                text="Windows 原生拖放未启用\n\n仍可使用下方的路径选择与按钮"
-            )
+        # 拖放是否可用决定这里显示哪段文字；切换语言时按同一个键重设。
+        self._drop_key = (
+            "drop.text"
+            if enable_windows_drop(self.root.winfo_id(), self.on_drop)
+            else "drop.text_disabled"
+        )
+        self.drop_label.configure(text=t(self._drop_key))
 
-        if texlib.find_texconv():
-            self.status_var.set("准备就绪 · texconv 已就绪")
-        else:
-            self.status_var.set("准备就绪 · 首次转换将自动下载 texconv")
-
+        self._set_ready_status()
         self._finalize_geometry()
 
     def _apply_icon(self) -> None:
@@ -500,12 +583,50 @@ class App:
             except Exception:
                 continue
 
-    def add_path_row(self, parent, row, label, var, command) -> None:
-        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=5)
+    def add_path_row(self, parent, row, key: str, var, command) -> None:
+        self._text(ttk.Label(parent), key).grid(row=row, column=0, sticky="w", pady=5)
         ttk.Entry(parent, textvariable=var).grid(row=row, column=1, sticky="ew", padx=8)
-        ttk.Button(parent, text="选择…", command=command, width=8).grid(
+        self._text(ttk.Button(parent, command=command, width=8), "btn.browse").grid(
             row=row, column=2, sticky="w"
         )
+
+    # -- 语言 -------------------------------------------------------------
+    def set_language(self, lang: str) -> None:
+        """切换界面语言，并立刻写进设置文件（下次启动沿用）。"""
+        lang = i18n.normalize(lang)
+        if lang == i18n.get_lang():
+            self._paint_lang_switch()
+            return
+
+        # 尺寸下拉是「显示文案」，换语言前先记下它代表的长边像素。
+        size_target = size_target_from_label(self.size_var.get())
+        i18n.set_lang(lang)
+
+        for widget, key, kwargs in self._i18n_widgets:
+            try:
+                widget.configure(text=t(key, **kwargs))
+            except Exception:
+                continue
+        self.root.title(app_title())
+        self.size_box.configure(values=size_labels())
+        self.size_var.set(size_label(size_target))
+        self.drop_label.configure(text=t(self._drop_key))
+        self._paint_lang_switch()
+
+        # 正在转换时状态栏由进度回调持续改写，这里不要抢它的内容。
+        if not self.running:
+            self._set_ready_status()
+        if self.input_var.get().strip():
+            self._refresh_recommendation()
+        else:
+            self.recommend_var.set(t("rec.none"))
+            self.recommend_reason_var.set(t("rec.placeholder"))
+
+        error = save_settings(
+            {**self._settings_snapshot(), "geometry": self.root.geometry()}
+        )
+        if error:
+            log_exception(f"保存语言设置失败：{error}")
 
     # -- 日志与状态 -------------------------------------------------------
     def log_line(self, kind: str, text: str) -> None:
@@ -531,28 +652,31 @@ class App:
 
     # -- 选择路径 ---------------------------------------------------------
     def choose_input(self) -> None:
-        path = filedialog.askdirectory(title="选择包含 PNG 的输入文件夹")
+        path = filedialog.askdirectory(title=t("dlg.input"))
         if path:
             self.input_var.set(path)
             self._refresh_recommendation()
 
     def choose_output(self) -> None:
-        path = filedialog.askdirectory(title="选择 TEX 输出文件夹")
+        path = filedialog.askdirectory(title=t("dlg.output"))
         if path:
             self.output_var.set(path)
 
+    def _on_auto_recommend_toggle(self) -> None:
+        self._refresh_recommendation()
+
     def _refresh_recommendation(self) -> None:
         if not self.auto_recommend_var.get():
-            self.recommend_var.set("已关闭自动推荐")
-            self.recommend_reason_var.set("所有 PNG 都会用「输出格式」里手动选择的格式。")
+            self.recommend_var.set(t("rec.disabled"))
+            self.recommend_reason_var.set(t("rec.disabled_reason"))
             return
         raw = self.input_var.get().strip()
         if raw and Path(raw).is_file() and Path(raw).suffix.lower() == ".png":
             self._show_recommendation(Path(raw))
             return
         # 目录不在这里扫描：几千个文件会让「选择文件夹」卡住。
-        self.recommend_var.set("按文件名逐个推荐")
-        self.recommend_reason_var.set("转换时每张 PNG 都会按自己的文件名推荐格式。")
+        self.recommend_var.set(t("rec.by_name"))
+        self.recommend_reason_var.set(t("rec.by_name_reason"))
 
     def _show_recommendation(self, path: Path, apply: bool = False):
         fmt, reason = recommend_format_for_name(path.name)
@@ -565,19 +689,19 @@ class App:
     def auto_recommend(self) -> None:
         raw = self.input_var.get().strip()
         if not raw:
-            messagebox.showinfo(APP_TITLE, "请先选择 PNG 文件或包含 PNG 的文件夹。")
+            messagebox.showinfo(app_title(), t("msg.pick_png_first"))
             return
         pngs, _tex = scan_paths([raw], self.recursive_var.get())
         if not pngs:
-            messagebox.showinfo(APP_TITLE, "没有找到 PNG。")
+            messagebox.showinfo(app_title(), t("msg.no_png"))
             return
         fmt, _reason = self._show_recommendation(pngs[0], apply=True)
-        self.log_line("info", f"★ 推荐（按 {pngs[0].name}）：{fmt}")
+        self.log_line("info", t("log.recommend", name=pngs[0].name, fmt=fmt))
 
     # -- 拖放 -------------------------------------------------------------
     def on_drop(self, paths) -> None:
         if self.running:
-            self.log_line("warn", "⚠ 正在转换，请等当前任务结束或点「取消」。")
+            self.log_line("warn", t("drop.busy"))
             return
         # 拖入文件夹时顺手把「PNG 输入」填上，这样输出目录能保留子目录结构。
         if not self.input_var.get().strip():
@@ -589,7 +713,7 @@ class App:
                     self.input_var.set(dirs[0])
         pngs, texes = scan_paths(paths, self.recursive_var.get())
         if not pngs and not texes:
-            self.log_line("warn", "⚠ 拖入的内容里没有 PNG 或 TEX。")
+            self.log_line("warn", t("drop.noitems"))
             return
         if pngs:
             self._show_recommendation(pngs[0])
@@ -608,6 +732,8 @@ class App:
             "overwrite": self.overwrite_var.get(),
             "tex_overwrite_source": self.tex_overwrite_source_var.get(),
             "skip_same": self.skip_same_var.get(),
+            # 上次选的语言要记住，下次启动直接沿用。
+            "lang": i18n.get_lang(),
         }
 
     def _launch(self, pngs: list[Path], texes: list[Path]) -> None:
@@ -615,9 +741,8 @@ class App:
             return
         if texes and self.tex_overwrite_source_var.get():
             if not messagebox.askyesno(
-                APP_TITLE,
-                f"将直接覆盖选中的 {len(texes)} 个源 TEX 文件。\n\n"
-                "原文件会被替换且无法自动恢复，确定继续吗？",
+                app_title(),
+                t("msg.overwrite_tex", n=len(texes)),
             ):
                 return
 
@@ -633,14 +758,14 @@ class App:
         self.percent_var.set("0%")
         self._run_started = time.perf_counter()
         self._set_running(True)
-        self.status_var.set("正在准备…")
-        self.log_line("head", f"开始转换：PNG {len(pngs)} 个，TEX {len(texes)} 个")
+        self.status_var.set(t("status.preparing"))
+        self.log_line("head", t("log.start", png=len(pngs), tex=len(texes)))
         if settings["auto_recommend"] and pngs:
-            self.log_line("info", "自动推荐已启用：每个 PNG 按文件名单独选择格式。")
+            self.log_line("info", t("log.auto_recommend_on"))
         if settings["output"]:
-            self.log_line("info", f"输出目录：{settings['output']}")
+            self.log_line("info", t("log.output_dir", path=settings["output"]))
         else:
-            self.log_line("info", "TEX 输出目录为空：生成的 TEX 放在源文件旁边。")
+            self.log_line("info", t("log.output_empty"))
 
         threading.Thread(
             target=self.worker, args=(pngs, texes, run_settings), daemon=True
@@ -653,7 +778,7 @@ class App:
         try:
             jobs, stats = self.build_jobs(pngs, texes, settings, log)
         except Exception as exc:
-            log("err", f"✗ 构建任务失败：{exc}")
+            log("err", t("log.build_failed", err=exc))
             self.q.put(("done", RunStats(elapsed=time.perf_counter() - started)))
             return
 
@@ -664,9 +789,9 @@ class App:
 
         try:
             texconv = texlib.ensure_texconv(lambda m: log("info", m))
-            log("info", f"texconv：{texconv}")
+            log("info", t("log.texconv", path=texconv))
         except Exception as exc:
-            log("err", f"✗ 无法准备 texconv：{exc}")
+            log("err", t("log.texconv_failed", err=exc))
             failed = RunStats(total=stats.total, failed=len(jobs),
                               skipped=stats.skipped, elapsed=time.perf_counter() - started)
             self.q.put(("done", failed))
@@ -719,7 +844,7 @@ class App:
             info = png_info(png)
             if info is None:
                 stats.skipped += 1
-                log("warn", f"⚠ 跳过无法识别的 PNG：{png.name}")
+                log("warn", t("log.skip_bad_png", name=png.name))
                 continue
 
             fmt = recommend_format_for_name(png.name)[0] if auto_format else manual_format
@@ -736,10 +861,10 @@ class App:
 
             if dst.exists() and not overwrite:
                 stats.skipped += 1
-                log("warn", f"↷ 跳过（已存在）：{dst.name}")
+                log("warn", t("log.skip_exists", name=dst.name))
                 continue
             if len(str(dst)) > 250:
-                log("warn", f"⚠ 路径过长可能失败：{dst}")
+                log("warn", t("log.long_path", path=dst))
 
             resize = None
             if target and max(info.width, info.height) != target:
@@ -764,12 +889,12 @@ class App:
                 info = tex_info(tex)
             except Exception as exc:
                 stats.skipped += 1
-                log("warn", f"⚠ 跳过无法解析的 TEX：{tex.name}（{exc}）")
+                log("warn", t("log.skip_bad_tex", name=tex.name, err=exc))
                 continue
 
             if skip_same and info.fmt_name == manual_format and not target:
                 stats.skipped += 1
-                log("info", f"↷ 跳过（已是 {manual_format}）：{tex.name}")
+                log("info", t("log.skip_same", fmt=manual_format, name=tex.name))
                 continue
 
             if overwrite_tex:
@@ -784,7 +909,7 @@ class App:
 
             if dst.exists() and dst != tex and not overwrite:
                 stats.skipped += 1
-                log("warn", f"↷ 跳过（已存在）：{dst.name}")
+                log("warn", t("log.skip_exists", name=dst.name))
                 continue
 
             resize = None
@@ -801,16 +926,11 @@ class App:
 
         stats.total = len(jobs) + stats.skipped
         if bc1_alpha:
-            log(
-                "warn",
-                f"⚠ 有 {bc1_alpha} 张 PNG 使用 BC1 且带 Alpha 通道："
-                "BC1 不支持平滑透明，完全透明的像素在 FFXIV 里会变黑；"
-                "需要透明请改用 BC3 / BC7。",
-            )
+            log("warn", t("log.bc1_alpha", n=bc1_alpha))
         if stats.skipped:
-            log("info", f"已跳过 {stats.skipped} 个文件，待转换 {len(jobs)} 个。")
+            log("info", t("log.skipped", n=stats.skipped, m=len(jobs)))
         if not jobs:
-            log("warn", "没有需要转换的文件。")
+            log("warn", t("log.nothing_to_do"))
         return jobs, stats
 
     # -- 按钮动作 ---------------------------------------------------------
@@ -819,31 +939,28 @@ class App:
             return
         raw = self.input_var.get().strip()
         if not raw:
-            messagebox.showwarning(APP_TITLE, "请选择 PNG 输入文件夹。")
+            messagebox.showwarning(app_title(), t("msg.pick_input"))
             return
         pngs, _tex = scan_paths([raw], self.recursive_var.get())
         if not pngs:
-            messagebox.showwarning(
-                APP_TITLE,
-                "输入路径里没有 PNG。\n\n如果是 TEX 文件，请用「批量 TEX 格式转换…」或直接拖入。",
-            )
+            messagebox.showwarning(app_title(), t("msg.input_no_png"))
             return
         self._show_recommendation(pngs[0])
         self._launch(pngs, [])
 
     def choose_tex_files(self) -> None:
         if self.running:
-            messagebox.showinfo(APP_TITLE, "当前正在转换，请等待完成。")
+            messagebox.showinfo(app_title(), t("msg.busy_wait"))
             return
         files = filedialog.askopenfilenames(
-            title="选择要转换格式的 FFXIV TEX 文件",
-            filetypes=[("FFXIV TEX", "*.tex *.TEX"), ("所有文件", "*.*")],
+            title=t("dlg.tex_files"),
+            filetypes=[("FFXIV TEX", "*.tex *.TEX"), (t("dlg.all_files"), "*.*")],
         )
         if not files:
             return
         texes = [Path(x) for x in files if Path(x).is_file() and Path(x).suffix.lower() == ".tex"]
         if not texes:
-            messagebox.showwarning(APP_TITLE, "没有选择有效的 .tex 文件。")
+            messagebox.showwarning(app_title(), t("msg.no_tex"))
             return
         self._launch([], texes)
 
@@ -852,23 +969,23 @@ class App:
             return
         self.cancel_event.set()
         self.cancel_button.configure(state="disabled")
-        self.status_var.set("正在取消…（会终止当前的 texconv 进程）")
+        self.status_var.set(t("status.cancelling"))
 
     def open_output(self) -> None:
         target = self.output_var.get().strip() or self.input_var.get().strip()
         if not target:
-            messagebox.showinfo(APP_TITLE, "还没有设置输入或输出文件夹。")
+            messagebox.showinfo(app_title(), t("msg.no_folders"))
             return
         path = Path(target)
         if path.is_file():
             path = path.parent
         if not path.exists():
-            messagebox.showinfo(APP_TITLE, "文件夹尚不存在。")
+            messagebox.showinfo(app_title(), t("msg.folder_missing"))
             return
         try:
             os.startfile(str(path))
         except Exception as exc:
-            messagebox.showerror(APP_TITLE, f"无法打开文件夹：{exc}")
+            messagebox.showerror(app_title(), t("msg.open_failed", err=exc))
 
     # -- 事件循环 ---------------------------------------------------------
     def process_events(self) -> None:
@@ -894,25 +1011,30 @@ class App:
         elapsed = time.perf_counter() - self._run_started
         rate = done / elapsed if elapsed > 0.05 and done else 0
         eta = (total - done) / rate if rate else 0
-        self.status_var.set(
-            f"转换中 {done}/{total} · 已用 {elapsed:.0f}s" + (f" · 剩余约 {eta:.0f}s" if rate else "")
-        )
+        text = t("status.running", done=done, total=total, elapsed=f"{elapsed:.0f}")
+        if rate:
+            text += t("status.eta", eta=f"{eta:.0f}")
+        self.status_var.set(text)
 
     def _on_done(self, stats: RunStats) -> None:
         self._set_running(False)
         if stats.cancelled == 0:
             self.progress_var.set(100 if stats.total else 0)
             self.percent_var.set("100%" if stats.total else "0%")
-        self.status_var.set(f"{'已取消' if stats.cancelled else '完成'}：{stats.summary()} · 用时 {stats.elapsed:.1f}s")
+        state = t("status.state_cancelled") if stats.cancelled else t("status.state_done")
+        self.status_var.set(
+            t("status.done", state=state, summary=stats.summary(),
+              elapsed=f"{stats.elapsed:.1f}")
+        )
         self.log_line(
             "warn" if stats.failed or stats.cancelled else "ok",
-            f"— {stats.summary()}，用时 {stats.elapsed:.1f}s —",
+            t("log.summary_line", summary=stats.summary(), elapsed=f"{stats.elapsed:.1f}"),
         )
 
     def on_close(self) -> None:
         try:
             if self.running:
-                if not messagebox.askyesno(APP_TITLE, "正在转换，确定要退出吗？"):
+                if not messagebox.askyesno(app_title(), t("msg.confirm_exit")):
                     return
                 self.cancel_event.set()
             error = save_settings(
@@ -1010,7 +1132,7 @@ def run_convert_cli(argv: list[str]) -> int:
         "output": str(out_dir) if out_dir else "",
         "format": fmt,
         "quality": "q",
-        "size": "原尺寸",
+        "size": size_label(None),
         "auto_recommend": False,
         "overwrite": True,
         "tex_overwrite_source": False,
@@ -1036,7 +1158,7 @@ def run_convert_cli(argv: list[str]) -> int:
         report["failed"] = stats.failed
         report["skipped"] = stats.skipped
     except Exception as exc:
-        log("err", f"转换失败：{exc}")
+        log("err", t("log.convert_failed", err=exc))
         report["error"] = f"{type(exc).__name__}: {exc}"
 
     target = (out_dir or app_dir()) / "convert_report.json"
@@ -1053,6 +1175,9 @@ def run_convert_cli(argv: list[str]) -> int:
 
 
 def main() -> int:
+    # 先把上次选的语言装好：无界面模式（--selftest / --convert）的日志也跟着走。
+    i18n.set_lang(load_settings().get("lang"))
+
     if "--selftest" in sys.argv[1:]:
         return run_selftest_cli(sys.argv)
     if "--convert" in sys.argv[1:]:
@@ -1096,7 +1221,11 @@ def main() -> int:
     except Exception as exc:
         log_exception("程序启动失败", exc)
         try:
-            messagebox.showerror(APP_TITLE, "程序启动时发生错误，详细信息已写入：\n" + str(LOG_FILE) + "\n\n错误：" + str(exc), parent=root)
+            messagebox.showerror(
+                app_title(),
+                t("msg.startup_failed", log=LOG_FILE, err=exc),
+                parent=root,
+            )
         except Exception:
             pass
         try:

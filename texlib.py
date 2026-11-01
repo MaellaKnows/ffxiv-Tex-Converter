@@ -33,6 +33,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
+import i18n
+
 # ---------------------------------------------------------------------------
 # 常量
 # ---------------------------------------------------------------------------
@@ -125,7 +127,7 @@ def _clean_texconv_output(text: str) -> list[str]:
 def _error_excerpt(text: str, limit: int = 3) -> str:
     lines = _clean_texconv_output(text)
     if not lines:
-        return "texconv 未返回任何信息。"
+        return i18n.t("err.no_output")
     picked = [l for l in lines if "FAILED" in l.upper() or "ERROR" in l.upper()]
     return " / ".join((picked or lines)[-limit:])
 
@@ -149,7 +151,7 @@ def bc_mip_size(width: int, height: int, block_bytes: int) -> int:
 def expected_mip_sizes(width: int, height: int, dxgi: int, levels: int) -> list[int]:
     """按 DXGI 格式推算每一级 mip 的字节数。"""
     if levels < 1:
-        raise ValueError("mipmap 数量无效。")
+        raise ValueError(i18n.t("err.bad_mip_count"))
     out: list[int] = []
     w, h = width, height
     for _ in range(levels):
@@ -160,7 +162,7 @@ def expected_mip_sizes(width: int, height: int, dxgi: int, levels: int) -> list[
         elif dxgi in (DXGI_BC3_UNORM, DXGI_BC5_UNORM, DXGI_BC7_UNORM):
             out.append(bc_mip_size(w, h, 16))
         else:
-            raise ValueError(f"不支持的 DXGI 格式：{dxgi}")
+            raise ValueError(i18n.t("err.unsupported_dxgi", dxgi=dxgi))
         w = max(1, w // 2)
         h = max(1, h // 2)
     return out
@@ -176,9 +178,7 @@ def _copy_exact(src, dst, count: int, bufsize: int = 1 << 20) -> None:
     while left > 0:
         chunk = src.read(min(bufsize, left))
         if not chunk:
-            raise ValueError(
-                f"数据不完整：还差 {left:,} 字节。"
-            )
+            raise ValueError(i18n.t("err.incomplete_data", left=f"{left:,}"))
         dst.write(chunk)
         left -= len(chunk)
 
@@ -194,9 +194,9 @@ def fit_long_edge(width: int, height: int, target: int) -> tuple[int, int]:
     UI 图集）会被强行拉成正方形。这里按长边等比缩放。
     """
     if width <= 0 or height <= 0:
-        raise ValueError("图片尺寸无效。")
+        raise ValueError(i18n.t("err.bad_size"))
     if target <= 0:
-        raise ValueError("目标尺寸无效。")
+        raise ValueError(i18n.t("err.bad_target_size"))
     if width >= height:
         nw, nh = target, int(round(height * target / width))
     else:
@@ -268,14 +268,14 @@ class TexInfo:
 def read_tex_header(data: bytes) -> tuple[int, int, int, int, int, int]:
     """解析 80 字节 TEX 头 -> (attribute, tex_format, w, h, depth, levels)。"""
     if len(data) < TEX_HEADER_SIZE:
-        raise ValueError("文件太小，不是有效的 FFXIV TEX。")
+        raise ValueError(i18n.t("err.too_small"))
     attribute, tex_format, width, height, depth, levels = struct.unpack_from(
         "<IIHHHH", data, 0
     )
     if width < 1 or height < 1 or depth < 1:
-        raise ValueError("TEX 头中的尺寸无效。")
+        raise ValueError(i18n.t("err.bad_tex_size"))
     if levels < 1 or levels > MAX_TEX_MIPS:
-        raise ValueError(f"TEX 头中的 mipmap 数量无效（{levels}）。")
+        raise ValueError(i18n.t("err.bad_tex_mips", levels=levels))
     return attribute, tex_format, width, height, depth, levels
 
 
@@ -306,7 +306,7 @@ def _parse_dds_header(head: bytes, expected_format: str) -> tuple[int, int, int,
     不会去猜用户 PNG 的格式。
     """
     if len(head) < 128 or head[:4] != b"DDS ":
-        raise ValueError("texconv 输出不是有效的 DDS。")
+        raise ValueError(i18n.t("err.not_dds"))
 
     height, width = struct.unpack_from("<II", head, 12)
     levels = struct.unpack_from("<I", head, 28)[0] or 1
@@ -315,13 +315,13 @@ def _parse_dds_header(head: bytes, expected_format: str) -> tuple[int, int, int,
     try:
         expected_dxgi, _, _, _ = FORMAT_INFO[expected_format]
     except KeyError:
-        raise ValueError(f"不支持的输出格式：{expected_format}")
+        raise ValueError(i18n.t("err.unsupported_output", fmt=expected_format))
 
     payload_offset = 128
     actual_dxgi = None
     if pf_fourcc == 0x30315844:  # "DX10"
         if len(head) < 148:
-            raise ValueError("DDS 的 DX10 扩展头不完整。")
+            raise ValueError(i18n.t("err.dx10_header"))
         actual_dxgi = struct.unpack_from("<I", head, 128)[0]
         payload_offset = 148
 
@@ -345,8 +345,12 @@ def _parse_dds_header(head: bytes, expected_format: str) -> tuple[int, int, int,
 
     if actual_dxgi is not None and actual_dxgi != expected_dxgi:
         raise ValueError(
-            f"texconv 输出格式异常：DDS DXGI={actual_dxgi}，"
-            f"但本次要求的是 {expected_format}（DXGI={expected_dxgi}）。"
+            i18n.t(
+                "err.format_mismatch",
+                actual=actual_dxgi,
+                expected=expected_format,
+                want=expected_dxgi,
+            )
         )
 
     sizes = expected_mip_sizes(width, height, expected_dxgi, levels)
@@ -357,8 +361,7 @@ def build_tex_header(width: int, height: int, levels: int, tex_format: int,
                      mip_sizes: Sequence[int]) -> bytes:
     if levels > MAX_TEX_MIPS:
         raise ValueError(
-            f"mip 层数 {levels} 超过 FFXIV TEX 头能记录的 {MAX_TEX_MIPS} 层，"
-            "请减小图片尺寸。"
+            i18n.t("err.mip_overflow", levels=levels, max=MAX_TEX_MIPS)
         )
     # FFXIV 的 offset_to_surface 记录的是每一级 mip 的「起始偏移」，不是结尾偏移。
     offsets: list[int] = []
@@ -380,7 +383,7 @@ def build_tex_header(width: int, height: int, levels: int, tex_format: int,
     header += struct.pack("<III", 0, 1, 2)
     header += struct.pack(f"<{MAX_TEX_MIPS}I", *offsets)
     if len(header) != TEX_HEADER_SIZE:
-        raise AssertionError("内部错误：TEX 头不是 80 字节。")
+        raise AssertionError(i18n.t("err.tex_header_len"))
     return header
 
 
@@ -399,8 +402,11 @@ def dds_to_tex(dds_path: Path, tex_path: Path, expected_format: str) -> int:
         total = src.tell()
         if total < offset + payload_size:
             raise ValueError(
-                f"DDS 数据不完整：需要 {payload_size:,} 字节，"
-                f"实际只有 {max(0, total - offset):,} 字节。"
+                i18n.t(
+                    "err.dds_short",
+                    need=f"{payload_size:,}",
+                    have=f"{max(0, total - offset):,}",
+                )
             )
 
         header = build_tex_header(width, height, levels, tex_format, sizes)
@@ -413,7 +419,7 @@ def dds_to_tex(dds_path: Path, tex_path: Path, expected_format: str) -> int:
                 src.seek(offset)
                 _copy_exact(src, dst, payload_size)
             if tmp_path.stat().st_size != TEX_HEADER_SIZE + payload_size:
-                raise ValueError("生成 TEX 的长度校验失败。")
+                raise ValueError(i18n.t("err.tex_len_check"))
             os.replace(tmp_path, tex_path)
         finally:
             if tmp_path.exists():
@@ -437,11 +443,10 @@ def tex_to_dds(tex_path: Path, dds_path: Path) -> TexInfo:
         head = src.read(TEX_HEADER_SIZE)
         attribute, tex_format, width, height, depth, levels = read_tex_header(head)
         if depth not in (1, 0):
-            raise ValueError(f"暂不支持 3D/立方体贴图（depth={depth}）。")
+            raise ValueError(i18n.t("err.tex3d", depth=depth))
         if tex_format not in TEX_FORMAT_TO_NAME:
             raise ValueError(
-                f"暂不支持该 TEX 格式 ID：0x{tex_format:04X}。"
-                "支持 BGRA8 / BC1 / BC3 / BC5 / BC7。"
+                i18n.t("err.tex_format", fmt=f"{tex_format:04X}")
             )
         fmt_name = TEX_FORMAT_TO_NAME[tex_format]
         dxgi = FORMAT_INFO[fmt_name][0]
@@ -449,7 +454,7 @@ def tex_to_dds(tex_path: Path, dds_path: Path) -> TexInfo:
         offsets = struct.unpack_from(f"<{MAX_TEX_MIPS}I", head, 28)
         start = offsets[0] or TEX_HEADER_SIZE
         if start < TEX_HEADER_SIZE:
-            raise ValueError("TEX mip 数据偏移无效。")
+            raise ValueError(i18n.t("err.tex_offset"))
 
         sizes = expected_mip_sizes(width, height, dxgi, levels)
         payload_size = sum(sizes)
@@ -457,8 +462,11 @@ def tex_to_dds(tex_path: Path, dds_path: Path) -> TexInfo:
         total = src.tell()
         if start + payload_size > total:
             raise ValueError(
-                f"TEX mip 数据不完整：需要 {payload_size:,} 字节，"
-                f"文件只有 {max(0, total - start):,} 字节。"
+                i18n.t(
+                    "err.tex_short",
+                    need=f"{payload_size:,}",
+                    have=f"{max(0, total - start):,}",
+                )
             )
 
         flags = 0x0002100F  # CAPS|HEIGHT|WIDTH|PIXELFORMAT|MIPMAPCOUNT|LINEARSIZE
@@ -473,7 +481,7 @@ def tex_to_dds(tex_path: Path, dds_path: Path) -> TexInfo:
         header += struct.pack("<5I", caps, 0, 0, 0, 0)
         header += struct.pack("<5I", dxgi, 3, 0, 1, 0)  # DIMENSION_TEXTURE2D
         if len(header) != 148:
-            raise AssertionError(f"DDS 头长度错误：{len(header)}")
+            raise AssertionError(i18n.t("err.dds_header_len", n=len(header)))
 
         dds_path.parent.mkdir(parents=True, exist_ok=True)
         with open(dds_path, "wb") as dst:
@@ -538,7 +546,7 @@ def _download(url: str, progress: Callable[[str], None] | None = None) -> bytes:
                 break
             buf += chunk
             if progress and total:
-                progress(f"下载 texconv… {len(buf) / total * 100:.0f}%")
+                progress(i18n.t("log.download_pct", pct=f"{len(buf) / total * 100:.0f}"))
     return bytes(buf)
 
 
@@ -549,7 +557,7 @@ def download_texconv(dest: Path, progress: Callable[[str], None] | None = None) 
     for url in TEXCONV_URLS:
         try:
             if progress:
-                progress(f"正在下载 texconv：{url}")
+                progress(i18n.t("log.downloading", url=url))
             data = _download(url, progress)
             if url.lower().endswith(".nupkg"):
                 tmp = dest.with_suffix(".nupkg")
@@ -558,7 +566,7 @@ def download_texconv(dest: Path, progress: Callable[[str], None] | None = None) 
                     with zipfile.ZipFile(tmp) as z:
                         names = [n for n in z.namelist() if n.lower().endswith("texconv.exe")]
                         if not names:
-                            raise RuntimeError("NuGet 包内没有 texconv.exe。")
+                            raise RuntimeError(i18n.t("err.no_texconv_in_nupkg"))
                         names.sort(key=lambda n: (0 if "win-x64" in n.lower() else 1, len(n)))
                         with z.open(names[0]) as src, open(dest, "wb") as out:
                             shutil.copyfileobj(src, out)
@@ -566,14 +574,14 @@ def download_texconv(dest: Path, progress: Callable[[str], None] | None = None) 
                     tmp.unlink(missing_ok=True)
             else:
                 if data[:2] != b"MZ" or len(data) < TEXCONV_MIN_SIZE:
-                    raise RuntimeError("下载到的不是有效的 texconv.exe。")
+                    raise RuntimeError(i18n.t("err.bad_download"))
                 dest.write_bytes(data)
             if dest.is_file() and dest.stat().st_size >= TEXCONV_MIN_SIZE:
                 return dest
-            raise RuntimeError("texconv.exe 校验失败。")
+            raise RuntimeError(i18n.t("err.texconv_verify"))
         except Exception as exc:  # 换下一个源
             errors.append(f"{url} -> {exc}")
-    raise RuntimeError("无法下载 texconv：\n" + "\n".join(errors))
+    raise RuntimeError(i18n.t("err.download_failed", errors="\n".join(errors)))
 
 
 def ensure_texconv(progress: Callable[[str], None] | None = None) -> Path:
@@ -599,20 +607,20 @@ def recommend_format_for_name(name: str) -> tuple[str, str]:
         or "nrm" in tokens or "_n_" in compact or compact.endswith("_n_")
         or stem.endswith("_n")
     ):
-        return "BC7_UNORM", "Normal/法线：推荐 BC7，保留完整通道；如需其他格式，可关闭自动推荐后手动选择。"
+        return "BC7_UNORM", i18n.t("rec.normal")
 
     if (
         "rg" in tokens or "rgmap" in tokens or "2channel" in tokens
         or "twochannel" in tokens or stem.endswith("_rg")
     ):
-        return "BC5_UNORM", "检测到 RG/双通道：BC5 适合真正只使用 R+G 的数据。"
+        return "BC5_UNORM", i18n.t("rec.rg")
 
     if (
         "mask" in tokens or "maskmap" in tokens or "msk" in tokens
         or "roughness" in tokens or "specular" in tokens or "ao" in tokens
         or stem.endswith("_m") or "_m_" in compact
     ):
-        return "BC7_UNORM", "Mask/Specular/AO：FFXIV 不同 Shader 的通道打包可能不同，默认 BC7 保留完整通道。"
+        return "BC7_UNORM", i18n.t("rec.mask")
 
     diffuse_name = (
         "diffuse" in stem
@@ -626,18 +634,18 @@ def recommend_format_for_name(name: str) -> tuple[str, str]:
         or "_d_" in compact
     )
     if diffuse_name:
-        return "BC1_UNORM", "Diffuse/Albedo/Color：推荐 BC1；若贴图需要 Alpha，请改用 BC3/BC7。"
+        return "BC1_UNORM", i18n.t("rec.diffuse")
 
     if (
         "icon" in tokens or "ui" in tokens or "atlas" in tokens
         or "decal" in tokens or "effect" in tokens or "vfx" in tokens
     ):
-        return "BC7_UNORM", "UI/Icon/Atlas/Effect：推荐 BC7，适合可能含 Alpha 的 RGBA 贴图。"
+        return "BC7_UNORM", i18n.t("rec.ui")
 
     if "opaque" in tokens or "noalpha" in tokens or "solid" in tokens:
-        return "BC1_UNORM", "明确无 Alpha：推荐 BC1，文件体积约为 BC7 的一半。"
+        return "BC1_UNORM", i18n.t("rec.opaque")
 
-    return "BC7_UNORM", "未识别贴图类型：推荐 BC7 作为 FFXIV 通用高质量默认值。"
+    return "BC7_UNORM", i18n.t("rec.unknown")
 
 
 # ---------------------------------------------------------------------------
@@ -667,11 +675,11 @@ class RunStats:
     elapsed: float = 0.0
 
     def summary(self) -> str:
-        parts = [f"成功 {self.ok}", f"失败 {self.failed}"]
+        parts = [i18n.t("sum.ok", n=self.ok), i18n.t("sum.failed", n=self.failed)]
         if self.skipped:
-            parts.append(f"跳过 {self.skipped}")
+            parts.append(i18n.t("sum.skipped", n=self.skipped))
         if self.cancelled:
-            parts.append(f"已取消 {self.cancelled}")
+            parts.append(i18n.t("sum.cancelled", n=self.cancelled))
         return " / ".join(parts)
 
 
@@ -767,7 +775,7 @@ class TexConverter:
                 return root
             except OSError as exc:
                 last_error = exc
-        raise RuntimeError(f"无法创建临时目录：{last_error}")
+        raise RuntimeError(i18n.t("err.no_temp", err=last_error))
 
     def _make_batches(self, jobs: Sequence[Job]) -> Iterable[list[Job]]:
         """把任务切成批次：同一格式、同一质量、文件名不重复。
@@ -813,7 +821,7 @@ class TexConverter:
             except Exception as exc:
                 done += 1
                 stats.failed += 1
-                log("err", f"✗ {job.src.name}: {exc}")
+                log("err", i18n.t("log.job_failed", name=job.src.name, err=exc))
                 progress(done, total)
         return ready, done
 
@@ -873,12 +881,19 @@ class TexConverter:
             rc, out = self._run_texconv(self._build_args([job], out_dir), cancel)
             if rc == 0:
                 continue
-            log("warn", f"texconv 报告：{job.src.name} -> {_error_excerpt(out or output)}")
+            log(
+                "warn",
+                i18n.t(
+                    "log.texconv_report",
+                    name=job.src.name,
+                    excerpt=_error_excerpt(out or output),
+                ),
+            )
 
     def _finish_job(self, job: Job, out_dir: Path) -> tuple[bool, str]:
         dds = _find_dds(out_dir, job.src.stem)
         if dds is None:
-            return False, f"✗ {job.src.name}: texconv 没有生成 DDS。"
+            return False, i18n.t("log.job_failed", name=job.src.name, err=i18n.t("err.no_dds"))
         before = None
         if job.kind == "tex" and job.dst != job.src:
             try:
@@ -888,7 +903,7 @@ class TexConverter:
         try:
             size = dds_to_tex(dds, job.dst, job.fmt)
         except Exception as exc:
-            return False, f"✗ {job.src.name}: {exc}"
+            return False, i18n.t("log.job_failed", name=job.src.name, err=exc)
 
         if before:
             delta = (size - before) / before * 100
@@ -900,7 +915,7 @@ class TexConverter:
             src_part += f" ({job.src_desc})"
         size_part = ""
         if job.resize:
-            size_part = f", 缩放到 {job.resize[0]}x{job.resize[1]}"
+            size_part = i18n.t("log.resized", w=job.resize[0], h=job.resize[1])
         return True, f"✓ {src_part} → {job.dst.name} [{job.fmt}{size_part}, {ratio}]"
 
 

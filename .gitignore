@@ -1,0 +1,35 @@
+# ---- build output -----------------------------------------------------------
+/build/
+/dist/
+*.spec.bak
+
+# ---- python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---- downloaded at build time by prepare_texconv.py --------------------------
+# Microsoft DirectXTex texconv is fetched when building; never commit it.
+/tools/texconv.exe
+/tools/*.nupkg
+/tools/*.zip
+
+# ---- local runs -------------------------------------------------------------
+# Running from source keeps settings next to the code (the packaged EXE uses
+# %APPDATA%\Miili\FFXIV贴图批量转换器\ instead).
+/config/
+
+# ---- reports written by --selftest / --convert -------------------------------
+selftest_report.json
+convert_report.json
+
+# ---- editors / OS -----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store

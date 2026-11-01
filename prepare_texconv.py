@@ -76,6 +76,9 @@ def main():
                     dst.write(src.read())
         finally:
             tmp.unlink(missing_ok=True)
+    else:
+        # 官方 Release 直接给裸 EXE，写盘后下面统一校验。
+        OUT.write_bytes(data)
 
     if not OUT.is_file() or OUT.stat().st_size <= 100_000 or OUT.read_bytes()[:2] != b"MZ":
         print("[ERROR] Downloaded file is not a valid texconv.exe.", file=sys.stderr)
