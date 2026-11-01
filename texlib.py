@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+# FF14 Tex Converter — Copyright (C) 2026 MaellaKnows
+# Licensed under the GNU General Public License v3.0; see LICENSE.
+# Additional terms under GPLv3 §7 apply: see ADDITIONAL-TERMS.md
 """FFXIV TEX <-> DDS 转换核心库，与 Tk 界面解耦。
 
 本模块只做四件事：

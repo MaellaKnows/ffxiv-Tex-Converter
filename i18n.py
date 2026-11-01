@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+# FF14 Tex Converter — Copyright (C) 2026 MaellaKnows
+# Licensed under the GNU General Public License v3.0; see LICENSE.
+# Additional terms under GPLv3 §7 apply: see ADDITIONAL-TERMS.md
 """界面与日志文案的多语言（中文 / English）支持。
 
 main.py 与 texlib.py 都通过 t() 取文案；切换语言只改这里的全局状态，

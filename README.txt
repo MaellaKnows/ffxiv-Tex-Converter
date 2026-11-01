@@ -105,7 +105,7 @@ v1.0 每转换一张图都要重新启动一次 texconv.exe，每次启动约有
 1. 安装 Python 3.10+（勾选 Add Python to PATH）。
 2. 双击 BUILD_EXE.bat。
    脚本会自动安装 PyInstaller、准备 texconv.exe，然后打包。
-3. 成品：dist\FF14 Tex Converter.exe
+3. 成品：dist\FF14.Tex.Converter.exe
 
 说明：
 * tools\texconv.exe 已经随包提供（Microsoft DirectXTex 2026.5.8）。
@@ -118,7 +118,7 @@ v1.0 每转换一张图都要重新启动一次 texconv.exe，每次启动约有
 四、自检（排查「转换失败」时很有用）
 ================================================================
 
-    "FF14 Tex Converter.exe" --selftest
+    "FF14.Tex.Converter.exe" --selftest
 
 会在同目录生成 selftest_report.json，内容包括：
   * texconv 是否找到、版本号
@@ -138,7 +138,7 @@ tools\texconv.exe  Microsoft DirectXTex 官方压缩工具
 icon.ico           程序/窗口图标
 FFXIVTextureBatchConverter.spec   PyInstaller 打包配置
 prepare_texconv.py 打包前准备 texconv.exe
-rename_output.py   构建后把 EXE 改名为 FF14 Tex Converter.exe
+rename_output.py   构建后把 EXE 改名为 FF14.Tex.Converter.exe
 BUILD_EXE.bat      一键构建
 CLEAN_BUILD.bat    清理 build/dist
 
@@ -171,7 +171,7 @@ v1.3 修复（2026-10-29）
   （不落盘），读取也改成安全取值 settings.get("input")。
 - 新增无界面转换模式，便于排查和脚本批量处理：
 
-      "FF14 Tex Converter.exe" --convert <文件或文件夹> [输出目录] [--format BC1_UNORM]
+      "FF14.Tex.Converter.exe" --convert <文件或文件夹> [输出目录] [--format BC1_UNORM]
 
   走的和界面「开始」按钮完全相同的流程，结果写进 输出目录\convert_report.json，
   全部成功返回 0，有失败返回 1。

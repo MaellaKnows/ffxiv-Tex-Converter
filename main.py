@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+# FF14 Tex Converter — Copyright (C) 2026 MaellaKnows
+# Licensed under the GNU General Public License v3.0; see LICENSE.
+# Additional terms under GPLv3 §7 apply: see ADDITIONAL-TERMS.md
 """FFXIV 贴图批量转换器 —— 图形界面。
 
 转换逻辑全部在 texlib.py；本文件只负责界面、拖放、设置与线程调度。
